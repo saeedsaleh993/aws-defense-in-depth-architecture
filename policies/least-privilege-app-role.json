@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowReadDatabaseSecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-east-1:*:secret:prod/app/db-credentials-*"
+    },
+    {
+      "Sid": "AllowKMSDecryptViaSecretsManager",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:us-east-1:*:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "secretsmanager.us-east-1.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
