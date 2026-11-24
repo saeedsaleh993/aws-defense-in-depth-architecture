@@ -1,3 +1,16 @@
+"""
+Auto-remediation Lambda: removes world-open SSH/RDP from Security Groups.
+
+Triggered by EventBridge. Supports two event shapes:
+  1. AWS Config   -> "Config Rules Compliance Change"
+                     (detail.resourceId = sg-xxxx)
+  2. Security Hub -> "Security Hub Findings - Imported"
+                     (detail.findings[].Resources[].Id = arn:...:security-group/sg-xxxx)
+
+Execution role needs:
+  ec2:DescribeSecurityGroups, ec2:RevokeSecurityGroupIngress
+  + AWSLambdaBasicExecutionRole (CloudWatch Logs)
+"""
 import json
 import logging
 
