@@ -1,39 +1,95 @@
 import json
-import boto3
+import logging
 
-# استدعاء عميل خدمة EC2 للتحكم في إعدادات الشبكة والـ Security Groups
-ec2 = boto3.client('ec2')
+import boto3
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+ec2 = boto3.client("ec2")
+
+RISKY_PORTS = (22, 3389)  # SSH, RDP
+OPEN_IPV4 = "0.0.0.0/0"
+OPEN_IPV6 = "::/0"
+
+
+def extract_sg_id(event):
+    """Return the Security Group ID from a Config or Security Hub event."""
+    detail = event.get("detail", {})
+
+    # AWS Config event
+    resource_id = detail.get("resourceId", "")
+    if resource_id.startswith("sg-"):
+        return resource_id
+
+    # Security Hub (ASFF) event
+    for finding in detail.get("findings", []):
+        for resource in finding.get("Resources", []):
+            arn = resource.get("Id", "")
+            if ":security-group/sg-" in arn:
+                return arn.split("/")[-1]
+
+    return None
+
+
+def exposes_risky_port(rule):
+    """True if the rule covers SSH/RDP, including port ranges and all-traffic rules."""
+    protocol = rule.get("IpProtocol")
+    if protocol == "-1":  # all traffic: the API omits FromPort/ToPort
+        return True
+    if protocol != "tcp":
+        return False
+    low, high = rule.get("FromPort"), rule.get("ToPort")
+    return low is not None and high is not None and any(low <= p <= high for p in RISKY_PORTS)
+
+
+def build_revoke_request(rule):
+    """Build a request that removes ONLY the world-open CIDRs from this rule,
+    so legitimate entries in the same rule (e.g. an office IP) are kept."""
+    request = {"IpProtocol": rule["IpProtocol"]}
+    if "FromPort" in rule:
+        request["FromPort"] = rule["FromPort"]
+        request["ToPort"] = rule["ToPort"]
+
+    if any(r.get("CidrIp") == OPEN_IPV4 for r in rule.get("IpRanges", [])):
+        request["IpRanges"] = [{"CidrIp": OPEN_IPV4}]
+    if any(r.get("CidrIpv6") == OPEN_IPV6 for r in rule.get("Ipv6Ranges", [])):
+        request["Ipv6Ranges"] = [{"CidrIpv6": OPEN_IPV6}]
+
+    return request if ("IpRanges" in request or "Ipv6Ranges" in request) else None
+
 
 def lambda_handler(event, context):
-    print("Received Security Event:", json.dumps(event))
-    
-    # 1. استخراج رقم الـ Security Group المخالف من بيانات الحدث (Dictionary)
-    detail = event.get('detail', {})
-    sg_id = detail.get('resourceId')
-    
-    # التحقق من وجود رقم صحيح يبدأ بـ sg-
-    if not sg_id or not sg_id.startswith('sg-'):
-        print("No valid Security Group ID found.")
+    logger.info("Received event: %s", json.dumps(event))
+
+    sg_id = extract_sg_id(event)
+    if not sg_id:
+        logger.info("No Security Group ID found - skipping")
         return {"status": "skipped"}
 
-    # 2. جلب تفاصيل القواعد الحالية للـ Security Group من AWS
-    response = ec2.describe_security_groups(GroupIds=[sg_id])
-    sg = response['SecurityGroups'][0]
+    try:
+        sg = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"][0]
+    except ClientError as err:
+        # e.g. InvalidGroup.NotFound if the SG was deleted before we ran
+        logger.error("Cannot describe %s: %s", sg_id, err)
+        return {"status": "error", "securityGroup": sg_id}
 
-    # 3. المرور على كل القواعد (Loop) وفحص المنافذ الخطرة المفتوحة للعالم (0.0.0.0/0)
-    for rule in sg.get('IpPermissions', []):
-        from_port = rule.get('FromPort')
-        
-        for ip_range in rule.get('IpRanges', []):
-            if ip_range.get('CidrIp') == '0.0.0.0/0' and from_port in [22, 3389]:
-                # 4. حذف القاعدة المخالفة فوراً لإغلاق الثغرة تلقائياً
-                ec2.revoke_security_group_ingress(
-                    GroupId=sg_id,
-                    IpPermissions=[rule]
-                )
-                print(f"REMEDIATED: Closed port {from_port} on {sg_id}")
+    remediated = 0
+    for rule in sg.get("IpPermissions", []):
+        if not exposes_risky_port(rule):
+            continue
 
-    return {
-        "statusCode": 200,
-        "body": json.dumps(f"Security check completed for {sg_id}")
-    }
+        request = build_revoke_request(rule)
+        if request is None:
+            continue
+
+        try:
+            ec2.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=[request])
+            remediated += 1
+            logger.info("REMEDIATED %s: %s", sg_id, json.dumps(request))
+        except ClientError as err:
+            # Re-raise here instead if you want Lambda retries / a DLQ to catch failures
+            logger.error("Failed to revoke on %s: %s", sg_id, err)
+
+    return {"status": "ok", "securityGroup": sg_id, "rulesRemediated": remediated}
