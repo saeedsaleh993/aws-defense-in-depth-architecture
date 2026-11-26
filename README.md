@@ -18,7 +18,9 @@
 
 ## Overview
 
-This solution implements a **Defense-in-Depth** security architecture for a highly available, three-tier web application (Web, Application, and Data tiers) on AWS. Built in alignment with the **AWS Well-Architected Framework (Security Pillar)**, the architecture enforces encryption at rest and in transit, automated credential rotation, continuous threat detection, compliance auditing against the **CIS AWS Foundations Benchmark** and **PCI DSS**, and automated incident response.
+This project designs and documents a **Defense-in-Depth** security architecture for a highly available, three-tier web application (Web, Application, and Data tiers) on AWS. Built in alignment with the **AWS Well-Architected Framework (Security Pillar)**, the architecture enforces encryption at rest and in transit, automated credential rotation, continuous threat detection, compliance auditing against the **CIS AWS Foundations Benchmark** and **PCI DSS**, and automated incident response.
+
+> **Project status:** the architecture design, security policies, and the remediation function are complete and documented. The deployment and validation steps in this document are provided for reproduction; the solution has not been deployed to a live AWS environment yet.
 
 | Security Pillar area | How this project addresses it |
 |---|---|
@@ -170,6 +172,8 @@ Editable source: [`secure-3tier-architecture.drawio`](./architecture/secure-3tie
 ---
 
 ## Testing and Validation
+
+This is the validation plan for a deployed environment. Each test lists the result it should produce.
 
 | # | Test | Expected result |
 |---|---|---|
